@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Three.js with Everything</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+    }
+    #c {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    #loading {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background-color: rgba(0,0,0,0.5);
+      z-index: 10;
+    }
+    #loading .progress {
+      margin: 1.5em;
+      border: 1px solid white;
+      width: 50vw;
+    }
+    #loading .progressbar {
+      margin: 2px;
+      background: white;
+      height: 1em;
+      transform-origin: top left;
+      transform: scaleX(0);
+    }
+    .split {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      pointer-events: none;
+    }
+    .split > #view1 {
+      width: 100%;
+      height: 100%;
+      pointer-events: auto;
+    }
+    .split > #view2 {
+      width: 0%;
+      height: 100%;
+      pointer-events: auto;
+      overflow: hidden;
+    }
+    #toggleView2 {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 9999;
+      font-size: 1rem;
+      padding: 0.5em 1em;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <button id="toggleView2">Show Right View</button>
+  <canvas id="c"></canvas>
+  <div id="loading">
+    <div class="progress">
+      <div class="progressbar"></div>
+    </div>
+  </div>
+  <div class="split">
+    <div id="view1" tabindex="1"></div>
+    <div id="view2" tabindex="2"></div>
+  </div>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+    import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+    import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    class ColorGUIHelper {
+      constructor(object, prop) {
+        this.object = object;
+        this.prop = prop;
+      }
+      get value() {
+        return `#${this.object[this.prop].getHexString()}`;
+      }
+      set value(hexString) {
+        this.object[this.prop].set(hexString);
+      }
+    }
+
+    function makeXYZGUI(gui, vector3, name, onChangeFn) {
+      const folder = gui.addFolder(name);
+      folder.add(vector3, 'x', -20, 20).onChange(onChangeFn);
+      folder.add(vector3, 'y', 0, 20).onChange(onChangeFn);
+      folder.add(vector3, 'z', -20, 20).onChange(onChangeFn);
+      folder.open();
+    }
+
+    const canvas = document.querySelector('#c');
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: true,
+    });
+    renderer.setClearColor(0x000000, 0);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    const scene = new THREE.Scene();
+    const loadManager = new THREE.LoadingManager();
+    const cubeTextureLoader = new THREE.CubeTextureLoader(loadManager);
+    const skyboxTexture = cubeTextureLoader.load([
+      '../resources/images/flower-1.jpg',
+      '../resources/images/flower-2.jpg',
+      '../resources/images/flower-3.jpg',
+      '../resources/images/flower-4.jpg',
+      '../resources/images/flower-5.jpg',
+      '../resources/images/flower-6.jpg',
+    ]);
+    scene.background = skyboxTexture;
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 1, 5);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    dirLight.position.set(5, 10, 7);
+    scene.add(dirLight);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 1024;
+    dirLight.shadow.mapSize.height = 1024;
+    const loadingElem = document.querySelector('#loading');
+    const progressBarElem = loadingElem.querySelector('.progressbar');
+    loadManager.onLoad = () => {
+      loadingElem.style.display = 'none';
+      createCubesAndStart();
+      setupLightingDemo();
+      requestAnimationFrame(renderMulti);
+    };
+    loadManager.onProgress = (url, itemsLoaded, itemsTotal) => {
+      const progress = itemsLoaded / itemsTotal;
+      progressBarElem.style.transform = `scaleX(${progress})`;
+    };
+    const texLoader = new THREE.TextureLoader(loadManager);
+    const wallTex = texLoader.load('../resources/images/east.jpg');
+    wallTex.colorSpace = THREE.SRGBColorSpace;
+    function loadColorTexture(path) {
+      const t = texLoader.load(path);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    }
+    const materials = [
+      loadColorTexture('../resources/images/flower-1.jpg'),
+      loadColorTexture('../resources/images/flower-2.jpg'),
+      loadColorTexture('../resources/images/flower-3.jpg'),
+      loadColorTexture('../resources/images/flower-4.jpg'),
+      loadColorTexture('../resources/images/flower-5.jpg'),
+      loadColorTexture('../resources/images/flower-6.jpg'),
+    ];
+    const patternTex = texLoader.load('../resources/images/pattern.png');
+    patternTex.colorSpace = THREE.SRGBColorSpace;
+    let windmillRoot;
+    const mtlLoader = new MTLLoader(loadManager);
+    mtlLoader.load(
+      '../resources/models/tree/DeadTree.mtl',
+      (mtl) => {
+        mtl.preload();
+        if (mtl.materials.Material) {
+          mtl.materials.Material.side = THREE.DoubleSide;
+        }
+        const objLoader = new OBJLoader(loadManager);
+        objLoader.setMaterials(mtl);
+        objLoader.load(
+          '../resources/models/tree/DeadTree.obj',
+          (obj) => {
+            windmillRoot = obj;
+            scene.add(windmillRoot);
+            windmillRoot.scale.set(1.0, 1.0, 1.0);
+            windmillRoot.position.set(0, 2, 0);
+          }
+        );
+      }
+    );
+    let cubes = [];
+    function createCubesAndStart() {
+      const geometry = new THREE.BoxGeometry(1, 1, 1);
+      const cubeMat = new THREE.MeshPhongMaterial({ map: wallTex });
+      const cube = new THREE.Mesh(geometry, cubeMat);
+      cube.position.set(-6, 2, 4);
+      cube.castShadow = true;
+      cube.receiveShadow = true;
+      scene.add(cube);
+      cubes.push(cube);
+      const faceMaterials = materials.map((tex) => {
+        return new THREE.MeshBasicMaterial({ map: tex });
+      });
+      const multiCube = new THREE.Mesh(geometry, faceMaterials);
+      multiCube.position.set(6, 2, 4);
+      multiCube.castShadow = true;
+      multiCube.receiveShadow = true;
+      scene.add(multiCube);
+      cubes.push(multiCube);
+      const patternMat = new THREE.MeshPhongMaterial({ map: patternTex });
+      const patternCube = new THREE.Mesh(geometry, patternMat);
+      patternCube.position.set(3, 2, 5);
+      patternCube.castShadow = true;
+      patternCube.receiveShadow = true;
+      scene.add(patternCube);
+      cubes.push(patternCube);
+      setupTextureGUI(patternTex);
+      requestAnimationFrame(render);
+    }
+    function render(time) {
+      time *= 0.001;
+      cubes.forEach((cube, i) => {
+        const speed = 1 + i * 0.2;
+        const rot = time * speed;
+        cube.rotation.x = rot;
+        cube.rotation.y = rot;
+      });
+      renderer.render(scene, camera);
+      requestAnimationFrame(render);
+    }
+    function setupTextureGUI(tex) {
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.needsUpdate = true;
+      class DegRadHelper {
+        constructor(obj, prop) {
+          this.obj = obj;
+          this.prop = prop;
+        }
+        get value() {
+          return THREE.MathUtils.radToDeg(this.obj[this.prop]);
+        }
+        set value(v) {
+          this.obj[this.prop] = THREE.MathUtils.degToRad(v);
+        }
+      }
+      class StringToNumberHelper {
+        constructor(obj, prop) {
+          this.obj = obj;
+          this.prop = prop;
+        }
+        get value() {
+          return this.obj[this.prop];
+        }
+        set value(v) {
+          this.obj[this.prop] = parseFloat(v);
+        }
+      }
+      const wrapModes = {
+        'ClampToEdgeWrapping': THREE.ClampToEdgeWrapping,
+        'RepeatWrapping': THREE.RepeatWrapping,
+        'MirroredRepeatWrapping': THREE.MirroredRepeatWrapping,
+      };
+      function updateTexture() {
+        tex.needsUpdate = true;
+      }
+      const gui = new GUI({ title: 'Texture Controls' });
+      gui.add(new StringToNumberHelper(tex, 'wrapS'), 'value', wrapModes)
+         .name('texture.wrapS')
+         .onChange(updateTexture);
+      gui.add(new StringToNumberHelper(tex, 'wrapT'), 'value', wrapModes)
+         .name('texture.wrapT')
+         .onChange(updateTexture);
+      gui.add(tex.repeat, 'x', 0, 5, 0.01).name('repeat.x');
+      gui.add(tex.repeat, 'y', 0, 5, 0.01).name('repeat.y');
+      gui.add(tex.offset, 'x', -2, 2, 0.01).name('offset.x');
+      gui.add(tex.offset, 'y', -2, 2, 0.01).name('offset.y');
+      tex.center.set(0.5, 0.5);
+      gui.add(new DegRadHelper(tex, 'rotation'), 'value', -360, 360, 1)
+         .name('rotation (deg)');
+      const filterOptions = {
+        'NearestFilter': THREE.NearestFilter,
+        'LinearFilter': THREE.LinearFilter,
+        'NearestMipmapNearestFilter': THREE.NearestMipmapNearestFilter,
+        'NearestMipmapLinearFilter': THREE.NearestMipmapLinearFilter,
+        'LinearMipmapNearestFilter': THREE.LinearMipmapNearestFilter,
+        'LinearMipmapLinearFilter': THREE.LinearMipmapLinearFilter,
+      };
+      gui.add(new StringToNumberHelper(tex, 'minFilter'), 'value', filterOptions)
+         .name('texture.minFilter')
+         .onChange(updateTexture);
+      gui.add(new StringToNumberHelper(tex, 'magFilter'), 'value', {
+        'NearestFilter': THREE.NearestFilter,
+        'LinearFilter': THREE.LinearFilter,
+      })
+         .name('texture.magFilter')
+         .onChange(updateTexture);
+    }
+    window.addEventListener('resize', () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    });
+    const view1Elem = document.querySelector('#view1');
+    const view2Elem = document.querySelector('#view2');
+    const camera2 = new THREE.PerspectiveCamera(60, 2, 0.1, 500);
+    camera2.position.set(40, 10, 30);
+    camera2.lookAt(0, 5, 0);
+    const cameraHelper = new THREE.CameraHelper(camera);
+    scene.add(cameraHelper);
+    const controls1 = new OrbitControls(camera, view1Elem);
+    controls1.target.set(0, 1, 0);
+    controls1.update();
+    const controls2 = new OrbitControls(camera2, view2Elem);
+    controls2.target.set(0, 5, 0);
+    controls2.update();
+    let showRightView = false;
+    const toggleBtn = document.querySelector('#toggleView2');
+    toggleBtn.addEventListener('click', () => {
+      showRightView = !showRightView;
+      if (showRightView) {
+        view1Elem.style.width = '50%';
+        view2Elem.style.width = '50%';
+        toggleBtn.textContent = 'Hide Right View';
+      } else {
+        view1Elem.style.width = '100%';
+        view2Elem.style.width = '0%';
+        toggleBtn.textContent = 'Show Right View';
+      }
+    });
+    function resizeRendererToDisplaySize(renderer) {
+      const canvas = renderer.domElement;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      const needResize = (canvas.width !== width || canvas.height !== height);
+      if (needResize) {
+        renderer.setSize(width, height, false);
+      }
+      return needResize;
+    }
+    function setScissorForElement(elem) {
+      const canvasRect = canvas.getBoundingClientRect();
+      const elemRect = elem.getBoundingClientRect();
+      const right  = Math.min(elemRect.right,  canvasRect.right)  - canvasRect.left;
+      const left   = Math.max(0, elemRect.left - canvasRect.left);
+      const bottom = Math.min(elemRect.bottom, canvasRect.bottom) - canvasRect.top;
+      const top    = Math.max(0, elemRect.top  - canvasRect.top);
+      const width  = Math.min(canvasRect.width, right - left);
+      const height = Math.min(canvasRect.height, bottom - top);
+      const positiveYUpBottom = canvasRect.height - bottom;
+      renderer.setScissor(left, positiveYUpBottom, width, height);
+      renderer.setViewport(left, positiveYUpBottom, width, height);
+      return width / height;
+    }
+    {
+      class MinMaxGUIHelper {
+        constructor(obj, minProp, maxProp, minDif) {
+          this.obj = obj;
+          this.minProp = minProp;
+          this.maxProp = maxProp;
+          this.minDif = minDif;
+        }
+        get min() {
+          return this.obj[this.minProp];
+        }
+        set min(v) {
+          this.obj[this.minProp] = v;
+          this.obj[this.maxProp] = Math.max(this.obj[this.maxProp], v + this.minDif);
+        }
+        get max() {
+          return this.obj[this.maxProp];
+        }
+        set max(v) {
+          this.obj[this.maxProp] = v;
+          this.min = this.min;
+        }
+      }
+      function updateCamera() {
+        camera.updateProjectionMatrix();
+      }
+      const gui = new GUI({ title: 'Main Camera' });
+      gui.add(camera, 'fov', 1, 180).onChange(updateCamera);
+      const minMaxGUIHelper = new MinMaxGUIHelper(camera, 'near', 'far', 0.1);
+      gui.add(minMaxGUIHelper, 'min', 0.1, 50, 0.1).name('near').onChange(updateCamera);
+      gui.add(minMaxGUIHelper, 'max', 0.1, 50, 0.1).name('far').onChange(updateCamera);
+    }
+    function setupLightingDemo() {
+      camera.fov = 45;
+      camera.near = 0.1;
+      camera.far = 100;
+      camera.position.set(0, 10, 20);
+      camera.updateProjectionMatrix();
+      const planeSize = 40;
+      const loader = new THREE.TextureLoader();
+      const texture = loader.load('../resources/images/desert.jpg');
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.magFilter = THREE.NearestFilter;
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const repeats = planeSize / 2;
+      texture.repeat.set(repeats, repeats);
+      const planeGeo = new THREE.PlaneGeometry(planeSize, planeSize);
+      const planeMat = new THREE.MeshPhongMaterial({
+        map: texture,
+        side: THREE.DoubleSide,
+      });
+      const planeMesh = new THREE.Mesh(planeGeo, planeMat);
+      planeMesh.rotation.x = Math.PI * -0.5;
+      planeMesh.receiveShadow = true;
+      scene.add(planeMesh);
+      {
+        const cubeSize = 4;
+        const cubeGeo = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
+        const cubeMat = new THREE.MeshPhongMaterial({ color: '#8AC' });
+        const cubeMesh = new THREE.Mesh(cubeGeo, cubeMat);
+        cubeMesh.position.set(cubeSize + 1, cubeSize / 2, 0);
+        cubeMesh.castShadow = true;
+        cubeMesh.receiveShadow = true;
+        scene.add(cubeMesh);
+      }
+      {
+        const sphereRadius = 3;
+        const sphereGeo = new THREE.SphereGeometry(sphereRadius, 32, 16);
+        const sphereMat = new THREE.MeshPhongMaterial({ color: '#CA8' });
+        const sphereMesh = new THREE.Mesh(sphereGeo, sphereMat);
+        sphereMesh.position.set(-sphereRadius - 1, sphereRadius + 2, 0);
+        sphereMesh.castShadow = true;
+        sphereMesh.receiveShadow = true;
+        scene.add(sphereMesh);
+      }
+      {
+        const tennisColor = 0xccff00;
+        const ballRadius = 0.3;
+        const ballSegments = 16;
+        const ballGeo = new THREE.SphereGeometry(ballRadius, ballSegments, ballSegments);
+        const ballMat = new THREE.MeshPhongMaterial({ color: tennisColor });
+        for (let i = 0; i < 20; i++) {
+          const ball = new THREE.Mesh(ballGeo, ballMat);
+          ball.position.set(
+            (Math.random() - 0.5) * 36,
+            ballRadius,
+            (Math.random() - 0.5) * 36
+          );
+          ball.castShadow = true;
+          ball.receiveShadow = true;
+          scene.add(ball);
+        }
+      }
+      {
+        const cylGeo = new THREE.CylinderGeometry(1, 1, 3, 32);
+        const cylMat = new THREE.MeshPhongMaterial({ color: 'purple' });
+        const cylinder = new THREE.Mesh(cylGeo, cylMat);
+        cylinder.position.set(9, 1.5, 0);
+        cylinder.castShadow = true;
+        cylinder.receiveShadow = true;
+        scene.add(cylinder);
+      }
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+      scene.add(ambientLight);
+      const hemiLight = new THREE.HemisphereLight(0xB1E1FF, 0xB97A20, 0.6);
+      scene.add(hemiLight);
+      const pointLight = new THREE.PointLight(0xffffff, 1, 20);
+      pointLight.position.set(0, 10, 0);
+      scene.add(pointLight);
+      const spotLight = new THREE.SpotLight(0xffffff, 1);
+      spotLight.position.set(0, 10, 0);
+      scene.add(spotLight);
+      scene.add(spotLight.target);
+      const gui = new GUI({ title: 'Lighting Demo' });
+      gui.addColor(new ColorGUIHelper(ambientLight, 'color'), 'value').name('Ambient Color');
+      gui.add(ambientLight, 'intensity', 0, 5, 0.01).name('Ambient Intensity');
+    }
+    function renderMulti(time) {
+      time *= 0.001;
+      resizeRendererToDisplaySize(renderer);
+      controls1.update();
+      controls2.update();
+      renderer.setScissorTest(true);
+      {
+        const aspect = setScissorForElement(view1Elem);
+        camera.aspect = aspect;
+        camera.updateProjectionMatrix();
+        cameraHelper.visible = false;
+        renderer.render(scene, camera);
+      }
+      if (showRightView) {
+        const aspect = setScissorForElement(view2Elem);
+        camera2.aspect = aspect;
+        camera2.updateProjectionMatrix();
+        cameraHelper.visible = true;
+        cameraHelper.update();
+        renderer.render(scene, camera2);
+      }
+      requestAnimationFrame(renderMulti);
+    }
+  </script>
+</body>
+</html>
